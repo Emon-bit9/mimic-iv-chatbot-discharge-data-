@@ -303,4 +303,102 @@ For technical issues or questions about implementation, refer to the code docume
 
 ## Data Privacy
 
-This system is designed to work with de-identified medical data. Ensure compliance with relevant healthcare data regulations (HIPAA, GDPR) when deploying in production environments. 
+This system is designed to work with de-identified medical data. Ensure compliance with relevant healthcare data regulations (HIPAA, GDPR) when deploying in production environments.
+
+## 🚀 **FULL DEPLOYMENT - Hugging Face Spaces (RECOMMENDED)**
+
+### Why Hugging Face Spaces?
+- ✅ **50GB Storage**: Perfect for large model files (393MB + 198MB)
+- ✅ **Git LFS Support**: Handles big files automatically
+- ✅ **Free Hosting**: No cost for public spaces
+- ✅ **Custom Domains**: Professional URLs
+- ✅ **Easy Updates**: Git-based deployment
+
+### Step-by-Step Deployment:
+
+#### 1. **Create Hugging Face Account**
+```bash
+# Visit: https://huggingface.co/
+# Sign up for free account
+```
+
+#### 2. **Create New Space**
+- Go to https://huggingface.co/spaces
+- Click "Create new Space"
+- Name: `your-username/medical-chatbot-mimic-iv`
+- SDK: **Streamlit**
+- License: MIT
+- Hardware: CPU (free)
+- Click "Create Space"
+
+#### 3. **Clone Your Space Repository**
+```bash
+# Clone the space repository
+git clone https://huggingface.co/spaces/YOUR_USERNAME/medical-chatbot-mimic-iv
+cd medical-chatbot-mimic-iv
+
+# Copy your chatbot files
+cp /path/to/your/chatbot/* .
+```
+
+#### 4. **Install Git LFS for Large Files**
+```bash
+# Install Git LFS
+git lfs install
+
+# Track large model files
+git lfs track "*.pkl"
+git lfs track "trained_models/*"
+
+# Add .gitattributes file
+git add .gitattributes
+```
+
+#### 5. **Prepare Files**
+- Copy `simple_web_app.py` → `app.py` (Spaces looks for app.py)
+- Copy `simple_chatbot.py`
+- Copy `requirements.txt`
+- Copy `trained_models/` folder with all .pkl files
+- Copy your MIMIC-IV data (if allowed)
+
+#### 6. **Deploy to Hugging Face Spaces**
+```bash
+# Add all files
+git add .
+
+# Commit changes
+git commit -m "Deploy full medical chatbot with MIMIC-IV data"
+
+# Push to Hugging Face Spaces
+git push origin main
+```
+
+#### 7. **Configure Space Settings**
+- Go to your Space Settings
+- Add description and tags
+- Set visibility (Public/Private)
+- Your app will auto-deploy!
+
+### 📁 **Required File Structure for Spaces:**
+```
+your-space/
+├── app.py                    # Main Streamlit app (rename from simple_web_app.py)
+├── simple_chatbot.py         # Chatbot class
+├── requirements.txt          # Dependencies
+├── README.md                 # Space description
+├── trained_models/           # Model files (Git LFS)
+│   ├── chatbot_data.pkl     # 198MB
+│   ├── tfidf_matrix.pkl     # 393MB
+│   └── medical_entities.pkl
+└── .gitattributes           # Git LFS tracking
+```
+
+### 🔧 **Hugging Face Requirements.txt:**
+```
+streamlit
+pandas
+numpy
+scikit-learn
+nltk
+pickle-mixin
+``` 
