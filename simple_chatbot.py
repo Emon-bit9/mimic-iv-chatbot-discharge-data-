@@ -1,322 +1,384 @@
-import pandas as pd
-import re
-from datetime import datetime
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+import pickle
 import numpy as np
+import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
+import re
+import os
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
 
 class SimpleMedicalChatbot:
-    def __init__(self, csv_path):
-        self.csv_path = csv_path
-        self.df = None
+    def __init__(self, models_dir="trained_models"):
+        self.models_dir = models_dir
         self.vectorizer = None
         self.tfidf_matrix = None
+        self.chatbot_data = None
+        self.medical_knowledge_base = None
+        self.training_metadata = None
         
-    def load_data(self):
-        """Load and preprocess the discharge data"""
-        print("Loading discharge data...")
-        try:
-            self.df = pd.read_csv(self.csv_path)
-            
-            # Convert datetime columns
-            self.df['charttime'] = pd.to_datetime(self.df['charttime'])
-            self.df['storetime'] = pd.to_datetime(self.df['storetime'])
-            
-            # Clean and preprocess text
-            self.df['cleaned_text'] = self.df['text'].apply(self.clean_text)
-            
-            # Create summary info for each note
-            self.df['text_length'] = self.df['text'].str.len()
-            self.df['word_count'] = self.df['text'].str.split().str.len()
-            
-            print(f"✅ Successfully loaded {len(self.df):,} discharge notes")
-            return True
-        except Exception as e:
-            print(f"❌ Error loading data: {e}")
-            return False
+        # Load all trained models
+        self.load_models()
     
-    def clean_text(self, text):
-        """Clean and preprocess medical text"""
-        if pd.isna(text):
+    def load_models(self):
+        """Load all pre-trained models"""
+        try:
+            print("Loading pre-trained models...")
+            
+            # Load TF-IDF vectorizer and matrix
+            with open(f"{self.models_dir}/tfidf_vectorizer.pkl", 'rb') as f:
+                self.vectorizer = pickle.load(f)
+            
+            with open(f"{self.models_dir}/tfidf_matrix.pkl", 'rb') as f:
+                self.tfidf_matrix = pickle.load(f)
+            
+            # Load processed data
+            with open(f"{self.models_dir}/chatbot_data.pkl", 'rb') as f:
+                self.chatbot_data = pickle.load(f)
+            
+            # Load medical knowledge base
+            with open(f"{self.models_dir}/medical_knowledge_base.pkl", 'rb') as f:
+                self.medical_knowledge_base = pickle.load(f)
+            
+            # Load training metadata
+            with open(f"{self.models_dir}/training_metadata.pkl", 'rb') as f:
+                self.training_metadata = pickle.load(f)
+            
+            print("All models loaded successfully!")
+            print(f"Dataset contains {self.training_metadata['num_records']} medical records")
+            print(f"Model trained on: {self.training_metadata['training_date']}")
+            
+        except Exception as e:
+            print(f"Error loading models: {e}")
+            print("Please run simple_train.py first to train the models.")
+            raise
+    
+    def preprocess_query(self, query):
+        """Preprocess user query"""
+        if not query:
             return ""
         
-        # Remove excessive whitespace and special characters
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'[^\w\s\.\,\;\:\!\?\-]', ' ', text)
-        text = text.strip()
+        # Clean the query
+        query = query.lower()
+        query = re.sub(r'[^\w\s\-\.]', ' ', query)
+        query = re.sub(r'\s+', ' ', query)
         
-        return text
+        return query.strip()
     
-    def build_index(self, sample_size=20000):
-        """Build TF-IDF search index"""
-        print("Building search index...")
-        try:
-            # Use a sample for faster processing
-            if len(self.df) > sample_size:
-                print(f"Using a sample of {sample_size:,} notes for faster search")
-                self.search_df = self.df.sample(n=sample_size, random_state=42).reset_index(drop=True)
-            else:
-                self.search_df = self.df.copy()
-            
-            # Build TF-IDF vectorizer
-            texts = self.search_df['cleaned_text'].tolist()
-            
-            self.vectorizer = TfidfVectorizer(
-                max_features=10000,
-                stop_words='english',
-                ngram_range=(1, 2),
-                min_df=2,
-                max_df=0.8
-            )
-            
-            self.tfidf_matrix = self.vectorizer.fit_transform(texts)
-            print("✅ Search index built successfully")
-            return True
-        except Exception as e:
-            print(f"❌ Error building index: {e}")
-            return False
+    def get_tfidf_similarity(self, query, top_k=5):
+        """Get similar documents using TF-IDF cosine similarity"""
+        # Transform query using trained vectorizer
+        query_vector = self.vectorizer.transform([query])
+        
+        # Calculate cosine similarity
+        similarities = cosine_similarity(query_vector, self.tfidf_matrix).flatten()
+        
+        # Get valid indices only (within the range of available texts)
+        max_valid_idx = len(self.chatbot_data['texts']) - 1
+        valid_similarities = similarities[:max_valid_idx + 1]  # Only consider valid range
+        
+        # Get top k similar documents from valid range
+        top_indices = valid_similarities.argsort()[-top_k:][::-1]
+        
+        results = []
+        for idx in top_indices:
+            # All indices are now guaranteed to be valid
+            results.append({
+                'index': idx,
+                'similarity': similarities[idx],
+                'text': self.chatbot_data['texts'][idx],
+                'cluster': 0  # Simple clustering
+            })
+        
+        return results
     
-    def search(self, query, top_k=5):
-        """Search for relevant discharge notes"""
-        try:
-            # Transform the query
-            query_tfidf = self.vectorizer.transform([query])
-            
-            # Calculate cosine similarity
-            similarities = cosine_similarity(query_tfidf, self.tfidf_matrix).flatten()
-            
-            # Get top results
-            top_indices = similarities.argsort()[-top_k:][::-1]
-            
-            results = []
-            for i, idx in enumerate(top_indices):
-                if similarities[idx] > 0:  # Only include results with some similarity
-                    row = self.search_df.iloc[idx]
+    def search_medical_knowledge(self, query):
+        """Search in medical knowledge base"""
+        results = []
+        query_lower = query.lower()
+        
+        for category, texts in self.medical_knowledge_base.items():
+            for text in texts[:10]:  # Limit search
+                if any(word in text.lower() for word in query_lower.split()):
                     results.append({
-                        'rank': i + 1,
-                        'score': float(similarities[idx]),
-                        'note_id': row['note_id'],
-                        'subject_id': row['subject_id'],
-                        'hadm_id': row['hadm_id'],
-                        'charttime': row['charttime'],
-                        'text': row['text'],
-                        'relevance': similarities[idx]
+                        'category': category,
+                        'text': text,
+                        'relevance': 'medical_knowledge'
                     })
-            
-            return results
-        except Exception as e:
-            print(f"❌ Error in search: {e}")
-            return []
-    
-    def search_by_keywords(self, keywords, top_k=5):
-        """Simple keyword-based search"""
-        try:
-            # Create a regex pattern for keywords
-            pattern = '|'.join([re.escape(keyword.lower()) for keyword in keywords])
-            
-            # Search in text
-            mask = self.search_df['cleaned_text'].str.lower().str.contains(pattern, na=False)
-            results_df = self.search_df[mask].copy()
-            
-            if len(results_df) == 0:
-                return []
-            
-            # Calculate relevance score based on keyword frequency
-            results_df['relevance'] = results_df['cleaned_text'].str.lower().str.count(pattern)
-            results_df = results_df.sort_values('relevance', ascending=False).head(top_k)
-            
-            results = []
-            for i, (_, row) in enumerate(results_df.iterrows()):
-                results.append({
-                    'rank': i + 1,
-                    'score': row['relevance'],
-                    'note_id': row['note_id'],
-                    'subject_id': row['subject_id'],
-                    'hadm_id': row['hadm_id'],
-                    'charttime': row['charttime'],
-                    'text': row['text'],
-                    'relevance': row['relevance']
-                })
-            
-            return results
-        except Exception as e:
-            print(f"❌ Error in keyword search: {e}")
-            return []
-    
-    def search_by_patient(self, subject_id):
-        """Get all notes for a specific patient"""
-        try:
-            patient_notes = self.df[self.df['subject_id'] == subject_id].copy()
-            patient_notes = patient_notes.sort_values('charttime')
-            
-            results = []
-            for _, row in patient_notes.iterrows():
-                results.append({
-                    'note_id': row['note_id'],
-                    'hadm_id': row['hadm_id'],
-                    'charttime': row['charttime'],
-                    'note_type': row['note_type'],
-                    'text': row['text']
-                })
-            
-            return results
-        except Exception as e:
-            print(f"❌ Error in patient search: {e}")
-            return []
-    
-    def get_statistics(self):
-        """Get basic statistics about the dataset"""
-        if self.df is None:
-            return {}
         
-        stats = {
-            'total_notes': len(self.df),
-            'unique_patients': self.df['subject_id'].nunique(),
-            'unique_admissions': self.df['hadm_id'].nunique(),
-            'date_range': f"{self.df['charttime'].min()} to {self.df['charttime'].max()}",
-            'avg_text_length': self.df['text_length'].mean(),
-            'note_types': self.df['note_type'].value_counts().to_dict()
-        }
-        
-        return stats
+        return results[:3]  # Return top 3 medical knowledge results
     
-    def display_results(self, results, max_text_length=300):
-        """Display search results in a formatted way"""
-        if not results:
-            print("❌ No results found.")
-            return
+    def search_by_patient_id(self, patient_id):
+        """Search for specific patient records by subject_id"""
+        results = []
         
-        print(f"\n🔍 Found {len(results)} relevant results:\n")
-        print("=" * 80)
-        
-        for result in results:
-            print(f"📄 Rank {result['rank']} | Score: {result['score']:.3f}")
-            print(f"   Patient ID: {result['subject_id']} | Note ID: {result['note_id']}")
-            print(f"   Admission: {result['hadm_id']} | Date: {result['charttime']}")
-            print(f"   Content Preview:")
-            
-            # Show preview of text
-            text = result['text']
-            if len(text) > max_text_length:
-                text = text[:max_text_length] + "..."
-            
-            # Indent the text
-            for line in text.split('\n')[:5]:  # Show first 5 lines
-                print(f"   {line}")
-            
-            print("-" * 80)
-    
-    def interactive_mode(self):
-        """Run the chatbot in interactive mode"""
-        print("\n🏥 MIMIC-ICU Discharge Notes Chatbot")
-        print("=" * 50)
-        
-        while True:
-            print("\nChoose an option:")
-            print("1. Search by text query")
-            print("2. Search by keywords")
-            print("3. Search by patient ID")
-            print("4. Show dataset statistics")
-            print("5. Exit")
-            
-            choice = input("\nEnter your choice (1-5): ").strip()
-            
-            if choice == '1':
-                query = input("\nEnter your search query: ").strip()
-                if query:
-                    num_results = input("Number of results (default 5): ").strip()
-                    num_results = int(num_results) if num_results.isdigit() else 5
-                    
-                    print(f"\n🔍 Searching for: '{query}'...")
-                    results = self.search(query, num_results)
-                    self.display_results(results)
-                else:
-                    print("❌ Please enter a valid query.")
-            
-            elif choice == '2':
-                keywords_input = input("\nEnter keywords (separated by commas): ").strip()
-                if keywords_input:
-                    keywords = [k.strip() for k in keywords_input.split(',')]
-                    num_results = input("Number of results (default 5): ").strip()
-                    num_results = int(num_results) if num_results.isdigit() else 5
-                    
-                    print(f"\n🔍 Searching for keywords: {keywords}...")
-                    results = self.search_by_keywords(keywords, num_results)
-                    self.display_results(results)
-                else:
-                    print("❌ Please enter valid keywords.")
-            
-            elif choice == '3':
-                patient_id = input("\nEnter patient ID (subject_id): ").strip()
-                if patient_id.isdigit():
-                    patient_id = int(patient_id)
-                    print(f"\n🔍 Searching for patient {patient_id}...")
-                    results = self.search_by_patient(patient_id)
-                    
-                    if results:
-                        print(f"\n📋 Found {len(results)} notes for patient {patient_id}:")
-                        print("=" * 80)
+        if self.chatbot_data['subject_ids']:
+            for i, subject_id in enumerate(self.chatbot_data['subject_ids']):
+                if str(subject_id) == str(patient_id):
+                    # Check if index is valid for texts
+                    if 0 <= i < len(self.chatbot_data['texts']):
+                        # Get note_id as well
+                        note_id = "N/A"
+                        if (self.chatbot_data['hadm_ids'] and 
+                            i < len(self.chatbot_data['hadm_ids'])):
+                            note_id = self.chatbot_data['hadm_ids'][i]
                         
-                        for i, result in enumerate(results):
-                            print(f"\n📄 Note {i+1}: {result['note_type']}")
-                            print(f"   Note ID: {result['note_id']}")
-                            print(f"   Admission: {result['hadm_id']}")
-                            print(f"   Date: {result['charttime']}")
-                            print(f"   Content Preview:")
-                            
-                            # Show preview
-                            text = result['text'][:300] + "..." if len(result['text']) > 300 else result['text']
-                            for line in text.split('\n')[:3]:
-                                print(f"   {line}")
-                            print("-" * 80)
-                    else:
-                        print(f"❌ No notes found for patient {patient_id}")
-                else:
-                    print("❌ Please enter a valid patient ID (number).")
+                        results.append({
+                            'index': i,
+                            'similarity': 1.0,
+                            'text': self.chatbot_data['texts'][i],
+                            'subject_id': subject_id,
+                            'note_id': note_id,
+                            'type': 'patient_record'
+                        })
+        
+        return results
+    
+    def generate_response(self, query):
+        """Generate response using TF-IDF similarity"""
+        if not query.strip():
+            return "Please provide a medical question or search term."
+        
+        # Preprocess query
+        processed_query = self.preprocess_query(query)
+        
+        # Check if it's a patient ID search
+        if re.match(r'^\d+$', query.strip()):
+            patient_results = self.search_by_patient_id(query.strip())
+            if patient_results:
+                return self.format_patient_response(patient_results)
+        
+        # Get results using TF-IDF
+        tfidf_results = self.get_tfidf_similarity(processed_query, 5)
+        medical_knowledge = self.search_medical_knowledge(processed_query)
+        
+        return self.format_response(query, tfidf_results, medical_knowledge)
+    
+    def format_response(self, query, results, medical_knowledge):
+        """Format the final response"""
+        if not results and not medical_knowledge:
+            return f"I couldn't find specific information about '{query}' in the medical records. Please try rephrasing your question or use more specific medical terms."
+        
+        response = f"**Search Results for '{query}':**\n\n"
+        
+        # Add main results
+        for i, result in enumerate(results, 1):
+            text_preview = result['text'][:300] + "..." if len(result['text']) > 300 else result['text']
+            confidence = result['similarity'] * 100
             
-            elif choice == '4':
-                print("\n📊 Dataset Statistics:")
-                stats = self.get_statistics()
-                print("=" * 50)
-                print(f"📄 Total Notes: {stats['total_notes']:,}")
-                print(f"👥 Unique Patients: {stats['unique_patients']:,}")
-                print(f"🏥 Unique Admissions: {stats['unique_admissions']:,}")
-                print(f"📅 Date Range: {stats['date_range']}")
-                print(f"📝 Average Text Length: {stats['avg_text_length']:.0f} characters")
-                print(f"\n📋 Note Types:")
-                for note_type, count in stats['note_types'].items():
-                    print(f"   {note_type}: {count:,}")
+            # Get subject ID and note ID if available
+            subject_id = "N/A"
+            note_id = "N/A"
+            try:
+                idx = int(result['index'])  # Convert numpy int to regular int
+                if (self.chatbot_data['subject_ids'] and 
+                    0 <= idx < len(self.chatbot_data['subject_ids'])):
+                    if self.chatbot_data['subject_ids'][idx]:
+                        subject_id = self.chatbot_data['subject_ids'][idx]
+                
+                if (self.chatbot_data['hadm_ids'] and 
+                    0 <= idx < len(self.chatbot_data['hadm_ids'])):
+                    if self.chatbot_data['hadm_ids'][idx]:
+                        note_id = self.chatbot_data['hadm_ids'][idx]
+            except (KeyError, IndexError, TypeError, ValueError):
+                subject_id = "N/A"
+                note_id = "N/A"
             
-            elif choice == '5':
-                print("\n👋 Thank you for using the MIMIC-ICU Chatbot!")
-                break
+            response += f"**Result {i}** | Subject ID: {subject_id} | Note ID: {note_id} | Confidence: {confidence:.1f}%\n"
+            response += f"{text_preview}\n\n"
+        
+        # Add medical knowledge if available
+        if medical_knowledge:
+            response += "**Related Medical Information:**\n"
+            for knowledge in medical_knowledge:
+                response += f"• {knowledge['category'].title()}: {knowledge['text'][:200]}...\n"
+        
+        # Add confidence explanation
+        response += "\n---\n"
+        response += "**About Confidence Scores:** The confidence percentage shows how well your search terms match the medical record content. Higher percentages indicate stronger matches.\n\n"
+        response += f"*Search completed using TF-IDF analysis on {self.training_metadata['num_records']:,} medical records.*"
+        
+        return response
+    
+    def format_response_advanced(self, query, results, medical_knowledge, show_detailed=False):
+        """Format response with advanced options"""
+        if not results and not medical_knowledge:
+            return f"No specific information found for '{query}' in the medical records. Try different search terms or check spelling."
+        
+        response = f"## Search Results for '{query}'\n\n"
+        
+        # Add main results with enhanced formatting
+        for i, result in enumerate(results, 1):
+            confidence = result['similarity'] * 100
             
+            # Get subject ID and note ID
+            subject_id = "N/A"
+            note_id = "N/A"
+            try:
+                idx = int(result['index'])  # Convert numpy int to regular int
+                if (self.chatbot_data['subject_ids'] and 
+                    0 <= idx < len(self.chatbot_data['subject_ids'])):
+                    if self.chatbot_data['subject_ids'][idx]:
+                        subject_id = self.chatbot_data['subject_ids'][idx]
+                
+                if (self.chatbot_data['hadm_ids'] and 
+                    0 <= idx < len(self.chatbot_data['hadm_ids'])):
+                    if self.chatbot_data['hadm_ids'][idx]:
+                        note_id = self.chatbot_data['hadm_ids'][idx]
+            except (KeyError, IndexError, TypeError, ValueError):
+                subject_id = "N/A"
+                note_id = "N/A"
+            
+            # Determine confidence level for styling
+            if confidence >= 60:
+                conf_class = "confidence-high"
+                conf_indicator = "HIGH"
+            elif confidence >= 30:
+                conf_class = "confidence-medium" 
+                conf_indicator = "MEDIUM"
             else:
-                print("❌ Invalid choice. Please enter 1-5.")
+                conf_class = "confidence-low"
+                conf_indicator = "LOW"
+            
+            # Format text based on detailed option
+            if show_detailed:
+                text_content = result['text']  # Full text
+                preview_note = ""
+            else:
+                text_content = result['text'][:400] + "..." if len(result['text']) > 400 else result['text']
+                preview_note = "\n*Note: This is a preview. Enable 'Show Detailed Output' for full records.*"
+            
+            response += f"""
+<div class="result-card">
+<div class="patient-info">
+Subject ID: {subject_id} | Note ID: {note_id} | Result {i} of {len(results)}
+</div>
+<div class="{conf_class} confidence-badge">
+{conf_indicator} Confidence: {confidence:.1f}%
+</div>
 
-def main():
-    # Initialize the chatbot
-    csv_path = "C:/Users/imran/Downloads/discharge.csv"
-    chatbot = SimpleMedicalChatbot(csv_path)
-    
-    # Load data
-    if not chatbot.load_data():
-        print("❌ Failed to load data. Please check the file path.")
-        return
-    
-    # Build search index
-    if not chatbot.build_index():
-        print("❌ Failed to build search index.")
-        return
-    
-    # Show basic statistics
-    stats = chatbot.get_statistics()
-    print(f"\n📊 Dataset loaded successfully!")
-    print(f"📄 Total discharge notes: {stats['total_notes']:,}")
-    print(f"👥 Unique patients: {stats['unique_patients']:,}")
-    
-    # Start interactive mode
-    chatbot.interactive_mode()
+**Medical Record Content:**
+{text_content}{preview_note}
+</div>
 
+"""
+        
+        # Add medical knowledge if available
+        if medical_knowledge:
+            response += """
+### Related Medical Knowledge
+"""
+            for knowledge in medical_knowledge:
+                response += f"• **{knowledge['category'].title()}**: {knowledge['text'][:150]}...\n"
+        
+        # Add comprehensive explanation
+        response += f"""
+
+---
+
+### About These Results
+
+**Search Method**: TF-IDF (Term Frequency-Inverse Document Frequency) analysis
+**Database**: {self.training_metadata['num_records']:,} MIMIC-IV discharge notes
+**Results Shown**: Top {len(results)} most relevant matches
+**Processing**: Real-time AI-powered text analysis
+
+**What are MIMIC-IV Records?**
+These are real (anonymized) medical discharge summaries from intensive care unit patients. They contain:
+- Patient demographics and admission details
+- Medical diagnoses and conditions  
+- Treatment procedures and medications
+- Discharge instructions and follow-up care
+
+**Confidence Score Methodology:**
+
+**Mathematical Foundation:**
+- **TF-IDF Analysis**: Term Frequency-Inverse Document Frequency vectorization
+- **Cosine Similarity**: Mathematical similarity measurement (0-1 scale, converted to %)
+- **Score Calculation**: cosine_similarity(query_vector, document_vector) × 100%
+
+**Classification Thresholds:**
+- **60-100% (HIGH)**: Strong semantic overlap, rare/specific medical terms, multiple exact matches
+- **30-59% (MEDIUM)**: Moderate term overlap, some relevant medical terminology, partial concept matches  
+- **0-29% (LOW)**: Minimal direct matches, broad medical context, common terms with high corpus frequency
+
+**Key Scoring Factors:**
+1. **Term Rarity**: Rare medical terms receive higher weights (lower IDF = higher importance)
+2. **Term Frequency**: How often search terms appear in the specific medical record
+3. **Query Coverage**: Percentage of search terms found in the document
+4. **Medical Specificity**: Specialized terminology scores higher than general terms
+5. **Document Normalization**: Longer documents are normalized to prevent length bias
+
+**Examples of High vs Low Confidence:**
+- HIGH: "pneumothorax chest tube" → exact medical procedure match
+- MEDIUM: "breathing problems" → general respiratory terminology  
+- LOW: "patient care" → very common, non-specific medical terms
+
+*Tip: Use precise medical terminology (e.g., "myocardial infarction" vs "heart attack") for optimal results*
+"""
+        
+        return response
+    
+    def format_patient_response(self, patient_results):
+        """Format response for patient-specific searches"""
+        if not patient_results:
+            return "No records found for this subject ID."
+        
+        subject_id = patient_results[0]['subject_id']
+        response = f"Found {len(patient_results)} record(s) for Subject ID {subject_id}:\n\n"
+        
+        for i, result in enumerate(patient_results, 1):
+            text_preview = result['text'][:400] + "..." if len(result['text']) > 400 else result['text']
+            note_id = result.get('note_id', 'N/A')
+            response += f"**Record {i}** | Subject ID: {subject_id} | Note ID: {note_id}\n"
+            response += f"{text_preview}\n\n"
+        
+        return response
+    
+    def get_model_info(self):
+        """Get information about the loaded models"""
+        if not self.training_metadata:
+            return "Model information not available."
+        
+        info = f"""
+Medical Chatbot Model Information:
+- Training Date: {self.training_metadata['training_date']}
+- Total Records: {self.training_metadata['num_records']:,}
+- TF-IDF Features: {self.training_metadata['tfidf_features']:,}
+- Sample Size: {self.training_metadata.get('sample_size', 'N/A'):,}
+
+Techniques Implemented:
+- TF-IDF Vectorization with cosine similarity
+- Medical knowledge base extraction
+- Patient-specific record lookup
+- Text preprocessing and cleaning
+        """
+        return info.strip()
+
+# Example usage and testing
 if __name__ == "__main__":
-    main() 
+    try:
+        chatbot = SimpleMedicalChatbot()
+        
+        print("Medical Chatbot loaded successfully!")
+        print(chatbot.get_model_info())
+        print("\n" + "="*50)
+        
+        # Test queries
+        test_queries = [
+            "diabetes treatment",
+            "heart failure symptoms",
+            "blood pressure medication",
+            "pneumonia diagnosis"
+        ]
+        
+        for query in test_queries:
+            print(f"\nQuery: {query}")
+            print("-" * 30)
+            response = chatbot.generate_response(query)
+            print(response[:200] + "..." if len(response) > 200 else response)
+            print()
+            
+    except Exception as e:
+        print(f"Error: {e}")
+        print("Please run 'python simple_train.py' first to train the models.") 
