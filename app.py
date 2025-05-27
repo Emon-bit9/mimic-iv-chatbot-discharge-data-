@@ -179,10 +179,31 @@ if IS_DEPLOYMENT:
         """)
 
 else:
-    # Import and run the full application
-    try:
-        from simple_web_app import main
-        main()
-    except ImportError as e:
-        st.error(f"Error importing application: {e}")
-        st.info("Please ensure all required files are present in the deployment.") 
+    # If models exist, redirect to simple_web_app.py
+    st.info("✅ **Models detected!** For full functionality, please run:")
+    st.code("streamlit run simple_web_app.py")
+    st.info("This will give you access to the complete medical search functionality with trained models.")
+    
+    st.markdown("---")
+    st.markdown("### 🔄 Alternative: Demo Mode")
+    st.markdown("You can still explore the demo interface below to understand the system capabilities.")
+    
+    # Show demo interface anyway
+    st.title("🏥 Medical Information Retrieval System - MIMIC-IV")
+    st.markdown("### Demo Interface")
+    
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); padding: 2rem; border-radius: 15px; margin: 1rem 0;">
+    <h3>🎯 System Overview</h3>
+    <p>This is an AI-powered medical information retrieval system designed to search through MIMIC-IV discharge notes using advanced NLP techniques.</p>
+    
+    <h4>🔬 Technical Features:</h4>
+    <ul>
+    <li><strong>TF-IDF Vectorization</strong>: Advanced text analysis with 5,000+ features</li>
+    <li><strong>Cosine Similarity</strong>: Mathematical similarity scoring (0-100%)</li>
+    <li><strong>Medical Knowledge Base</strong>: Extracted medical entities and patterns</li>
+    <li><strong>Real-time Processing</strong>: Sub-second query response times</li>
+    <li><strong>Confidence Scoring</strong>: Transparent relevance assessment</li>
+    </ul>
+    </div>
+    """, unsafe_allow_html=True) 
