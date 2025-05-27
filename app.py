@@ -1,19 +1,12 @@
 import streamlit as st
 import os
-import sys
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import warnings
-warnings.filterwarnings('ignore')
-
-# Add current directory to path for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Page configuration
 st.set_page_config(
     page_title="Medical Information Retrieval - MIMIC-IV",
-    page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
